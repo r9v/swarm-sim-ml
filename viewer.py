@@ -319,8 +319,11 @@ def handle_events(events, mouse_captured, follow_mode, dragging_slider, slider_r
             mouse_captured = not mouse_captured
             if mouse_captured:
                 pygame.mouse.set_visible(False)
-                pygame.mouse.set_pos(display[0] // 2, display[1] // 2)
+                pygame.event.set_grab(True)
+                pygame.mouse.get_rel()
             else:
+                pygame.event.set_grab(False)
+                pygame.mouse.set_pos(display[0] // 2, display[1] // 2)
                 pygame.mouse.set_visible(True)
         elif event.type == KEYDOWN and event.key == K_f:
             follow_mode = not follow_mode
@@ -336,13 +339,11 @@ def handle_events(events, mouse_captured, follow_mode, dragging_slider, slider_r
             if dragging_slider:
                 t = (event.pos[0] - slider_rect.x) / slider_rect.width
                 mouse_sens = 0.5 + np.clip(t, 0, 1) * 19.5
-        elif event.type == MOUSEMOTION and mouse_captured:
-            center = (display[0] // 2, display[1] // 2)
-            dx = event.pos[0] - center[0]
-            dy = event.pos[1] - center[1]
-            cam_yaw -= dx * mouse_sens * 0.02
-            cam_pitch = np.clip(cam_pitch + dy * mouse_sens * 0.02, -85, 89)
-            pygame.mouse.set_pos(center)
+
+    if mouse_captured:
+        dx, dy = pygame.mouse.get_rel()
+        cam_yaw -= dx * mouse_sens * 0.02
+        cam_pitch = np.clip(cam_pitch + dy * mouse_sens * 0.02, -85, 89)
 
     return running, mouse_captured, follow_mode, dragging_slider, mouse_sens, cam_yaw, cam_pitch
 
@@ -452,8 +453,8 @@ def main():
 
     mouse_captured = True
     pygame.mouse.set_visible(False)
-    pygame.mouse.set_pos(display[0] // 2, display[1] // 2)
-    pygame.event.get()
+    pygame.event.set_grab(True)
+    pygame.mouse.get_rel()
 
     running = True
     while running:
