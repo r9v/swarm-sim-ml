@@ -13,3 +13,8 @@ venv/
 checkpoints/
 outputs/
 wandb/
+*txt
+!requirements.txt
+*.md
+!README.md
+logs/*

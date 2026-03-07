@@ -1,0 +1,8 @@
+numpy
+pygame
+PyOpenGL
+gymnasium
+pettingzoo
+supersuit
+stable-baselines3
+tensorboard
