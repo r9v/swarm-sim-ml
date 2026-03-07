@@ -6,3 +6,5 @@ pettingzoo
 supersuit
 stable-baselines3
 tensorboard
+tqdm
+rich

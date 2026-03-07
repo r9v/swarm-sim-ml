@@ -571,6 +571,40 @@ def main():
     pygame.quit()
 
 
+def _log_episode(episode_num, ep_log, env):
+    print(f"\n{'='*70}")
+    print(f"EPISODE {episode_num}  |  steps={ep_log['steps']}  |  target=({env.target_pos[0]:.1f}, {env.target_pos[1]:.1f}, {env.target_pos[2]:.1f})")
+    print(f"{'='*70}")
+
+    hits = [a for a, r in ep_log["outcomes"].items() if r == "hit"]
+    collisions = [a for a, r in ep_log["outcomes"].items() if r == "collision"]
+    crashes = [a for a, r in ep_log["outcomes"].items() if r == "crash"]
+    oob = [a for a, r in ep_log["outcomes"].items() if r == "oob"]
+    alive = [a for a in env.possible_agents if a not in ep_log["outcomes"]]
+
+    print(f"  hits={len(hits)}  collisions={len(collisions)}  crashes={len(crashes)}  oob={len(oob)}  alive={len(alive)}")
+    if hits:
+        print(f"  hit drones: {', '.join(hits)}")
+        for h in hits:
+            print(f"    {h}: hit at step {ep_log['death_step'].get(h, '?')}, final_dist={ep_log['final_dist'].get(h, 0):.2f}")
+
+    print(f"\n  {'drone':<10} {'outcome':<12} {'step':<6} {'final_d':<9} {'min_d':<9} {'total_r':<10} {'align_avg':<10}")
+    print(f"  {'-'*10} {'-'*12} {'-'*6} {'-'*9} {'-'*9} {'-'*10} {'-'*10}")
+    for name in env.possible_agents:
+        outcome = ep_log["outcomes"].get(name, "alive")
+        step = ep_log["death_step"].get(name, ep_log["steps"])
+        final_d = ep_log["final_dist"].get(name, 0)
+        min_d = ep_log["min_dist"].get(name, 0)
+        total_r = ep_log["total_reward"].get(name, 0)
+        align_vals = ep_log["alignments"].get(name, [])
+        align_avg = np.mean(align_vals) if align_vals else 0
+        print(f"  {name:<10} {outcome:<12} {step:<6} {final_d:<9.2f} {min_d:<9.2f} {total_r:<10.2f} {align_avg:<10.3f}")
+
+    total_r = sum(ep_log["total_reward"].values())
+    print(f"\n  total_reward={total_r:.2f}  avg_per_drone={total_r/len(env.possible_agents):.2f}")
+    print(f"{'='*70}\n")
+
+
 def eval_loop(env, model):
     ctx = _init_viewer("Swarm Eval Viewer")
     obs, infos = env.reset()
@@ -584,6 +618,19 @@ def eval_loop(env, model):
     bar_x, bar_w = 200, ctx["display"][0] - 220
     bar_y, bar_h = ctx["display"][1] - 55, 10
     bar_rect = pygame.Rect(bar_x, bar_y, bar_w, bar_h)
+
+    def _new_ep_log():
+        return {
+            "steps": 0,
+            "outcomes": {},
+            "death_step": {},
+            "final_dist": {},
+            "min_dist": {a: float("inf") for a in env.possible_agents},
+            "total_reward": {a: 0.0 for a in env.possible_agents},
+            "alignments": {a: [] for a in env.possible_agents},
+        }
+
+    ep_log = _new_ep_log()
 
     def _snapshot():
         return {
@@ -611,12 +658,15 @@ def eval_loop(env, model):
         events = pygame.event.get()
         for event in events:
             if event.type == KEYDOWN and event.key == K_r:
+                if ep_log["steps"] > 0:
+                    _log_episode(episode_num, ep_log, env)
                 obs, infos = env.reset()
                 history = [_snapshot()]
                 target_pos = env.target_pos.copy()
                 step_idx = 0
                 paused = False
                 episode_num += 1
+                ep_log = _new_ep_log()
             elif event.type == KEYDOWN and event.key == K_q:
                 paused = not paused
             elif event.type == KEYDOWN and event.key == K_RIGHT and paused:
@@ -670,14 +720,61 @@ def eval_loop(env, model):
                         act, _ = model.predict(o, deterministic=True)
                         actions[agent] = act[0]
                     obs, rewards, terms, truncs, infos = env.step(actions)
+                    ep_log["steps"] = env.step_count
+
+                    for agent in list(rewards.keys()):
+                        ep_log["total_reward"][agent] = ep_log["total_reward"].get(agent, 0) + rewards[agent]
+                        d = infos[agent].get("distance_to_target", 0)
+                        ep_log["final_dist"][agent] = d
+                        ep_log["min_dist"][agent] = min(ep_log["min_dist"].get(agent, float("inf")), d)
+
+                        idx = int(agent.split("_")[1])
+                        assigned_angle = env._target_angle + np.pi + 2 * np.pi * idx / env.n_drones
+                        assigned_dir = np.array([np.cos(assigned_angle), 0.0, np.sin(assigned_angle)])
+                        from_target = env.drones[agent].position - env.target_pos
+                        from_target_xz = np.array([from_target[0], 0.0, from_target[2]])
+                        xz_norm = np.linalg.norm(from_target_xz)
+                        if xz_norm > 1e-6:
+                            alignment = np.dot(from_target_xz / xz_norm, assigned_dir)
+                            ep_log["alignments"][agent].append(alignment)
+
+                        if terms.get(agent, False):
+                            ep_log["death_step"][agent] = env.step_count
+                            if d < env.r_hit:
+                                ep_log["outcomes"][agent] = "hit"
+                            elif env.drones[agent].position[1] <= 0:
+                                ep_log["outcomes"][agent] = "crash"
+                            elif np.linalg.norm(env.drones[agent].position) > env.r_bounds:
+                                ep_log["outcomes"][agent] = "oob"
+                            else:
+                                ep_log["outcomes"][agent] = "collision"
+                        elif truncs.get(agent, False):
+                            ep_log["death_step"][agent] = env.step_count
+                            ep_log["outcomes"][agent] = "timeout"
+
+                    if env.step_count % 100 == 0:
+                        t = env.target_pos
+                        print(f"  step {env.step_count:4d} | alive={len(env.agents)} | target=({t[0]:+6.1f},{t[1]:+5.1f},{t[2]:+6.1f})")
+                        for a in sorted(rewards.keys()):
+                            p = env.drones[a].position
+                            spd = np.linalg.norm(env.drones[a].velocity)
+                            inf = infos[a]
+                            d = inf['distance_to_target']
+                            tr = ep_log["total_reward"].get(a, 0)
+                            act = actions.get(a, np.zeros(3))
+                            print(f"    {a}: pos=({p[0]:+6.1f},{p[1]:+5.1f},{p[2]:+6.1f})  dist={d:5.1f}  spd={spd:4.1f}  nn={inf['nn_dist']:4.1f}  aln={inf['alignment']:+.2f}")
+                            print(f"             r_app={inf['r_approach']:+.2f} r_prx={inf['r_prox']:+.2f} r_spd={inf['r_speed']:+.2f} r_sec={inf['r_sector']:+.2f}  cumR={tr:+.1f}  act=({act[0]:+.1f},{act[1]:+.1f},{act[2]:+.1f})")
+
                     history.append(_snapshot())
                     step_idx = len(history) - 1
                 else:
+                    _log_episode(episode_num, ep_log, env)
                     obs, infos = env.reset()
                     history = [_snapshot()]
                     target_pos = env.target_pos.copy()
                     step_idx = 0
                     episode_num += 1
+                    ep_log = _new_ep_log()
 
         frame = history[step_idx]
         trails = _trails_at(step_idx)
