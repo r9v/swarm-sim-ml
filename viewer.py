@@ -295,6 +295,32 @@ def draw_hud(surface, drones, font, mouse_sens, follow_mode, fps, cam_pos, cam_y
     surface.blit(overlay, (0, 0))
 
 
+def draw_eval_hud(surface, drones_list, font, mouse_sens, follow_mode, fps, cam_pos, cam_yaw, cam_pitch,
+                  step_idx, total_steps, paused, episode_num):
+    draw_hud(surface, drones_list, font, mouse_sens, follow_mode, fps, cam_pos, cam_yaw, cam_pitch)
+    overlay = pygame.Surface(surface.get_size(), pygame.SRCALPHA)
+    w, h = surface.get_size()
+
+    # Timeline bar
+    bar_x, bar_y, bar_w, bar_h = 200, h - 55, w - 220, 10
+    pygame.draw.rect(overlay, (60, 60, 60), (bar_x, bar_y, bar_w, bar_h), border_radius=4)
+    if total_steps > 0:
+        fill_w = int(bar_w * step_idx / max(total_steps, 1))
+        pygame.draw.rect(overlay, (0, 180, 220), (bar_x, bar_y, fill_w, bar_h), border_radius=4)
+    pygame.draw.rect(overlay, (120, 120, 120), (bar_x, bar_y, bar_w, bar_h), 1, border_radius=4)
+
+    # Step label
+    state_text = "PAUSED" if paused else "PLAYING"
+    label = font.render(f"Ep {episode_num}  Step {step_idx}/{total_steps}  [{state_text}]", True, (200, 200, 200))
+    overlay.blit(label, (bar_x, bar_y - 16))
+
+    # Controls help
+    ctrl = font.render("[R] Reset  [Q] Pause  [</>] Step  Click timeline to scrub", True, (150, 150, 150))
+    overlay.blit(ctrl, (bar_x, bar_y + 14))
+
+    surface.blit(overlay, (0, 0))
+
+
 # --- HUD texture blit ---
 
 def blit_hud_texture(hud_surface, hud_tex, display):
@@ -547,36 +573,163 @@ def main():
 
 def eval_loop(env, model):
     ctx = _init_viewer("Swarm Eval Viewer")
-    trails = {}
     obs, infos = env.reset()
+
+    history = []
+    step_idx = 0
+    paused = False
+    episode_num = 1
+    scrubbing = False
+    key_hold_timer = 0.0
+    bar_x, bar_w = 200, ctx["display"][0] - 220
+    bar_y, bar_h = ctx["display"][1] - 55, 10
+    bar_rect = pygame.Rect(bar_x, bar_y, bar_w, bar_h)
+
+    def _snapshot():
+        return {
+            name: (env.drones[name].position.copy(), env.drones[name].velocity.copy())
+            for name in env.possible_agents if name in env.drones
+        }
+
+    def _trails_at(idx):
+        trail_len = min(idx + 1, 400)
+        start = max(0, idx + 1 - trail_len)
+        trails = {}
+        for name in env.possible_agents:
+            pts = []
+            for frame in history[start:idx + 1]:
+                if name in frame:
+                    pts.append(frame[name][0])
+            trails[name] = pts
+        return trails
+
+    history.append(_snapshot())
+    target_pos = env.target_pos.copy()
 
     running = True
     while running:
-        running = _handle_frame_input(ctx)
+        events = pygame.event.get()
+        for event in events:
+            if event.type == KEYDOWN and event.key == K_r:
+                obs, infos = env.reset()
+                history = [_snapshot()]
+                target_pos = env.target_pos.copy()
+                step_idx = 0
+                paused = False
+                episode_num += 1
+            elif event.type == KEYDOWN and event.key == K_q:
+                paused = not paused
+            elif event.type == KEYDOWN and event.key == K_RIGHT and paused:
+                if step_idx < len(history) - 1:
+                    step_idx += 1
+                    key_hold_timer = 0.0
+            elif event.type == KEYDOWN and event.key == K_LEFT and paused:
+                if step_idx > 0:
+                    step_idx -= 1
+                    key_hold_timer = 0.0
+            elif event.type == MOUSEBUTTONDOWN and not ctx["mouse_captured"]:
+                if event.button == 1 and bar_rect.collidepoint(event.pos) and history:
+                    scrubbing = True
+                    t = (event.pos[0] - bar_x) / bar_w
+                    step_idx = int(np.clip(t, 0, 1) * (len(history) - 1))
+                    paused = True
+            elif event.type == MOUSEBUTTONUP:
+                scrubbing = False
+            elif event.type == MOUSEMOTION and scrubbing:
+                t = (event.pos[0] - bar_x) / bar_w
+                step_idx = int(np.clip(t, 0, 1) * (len(history) - 1))
 
-        actions = {}
-        for agent in env.agents:
-            o = obs[agent].reshape(1, -1)
-            act, _ = model.predict(o, deterministic=True)
-            actions[agent] = act[0]
-        obs, rewards, terms, truncs, infos = env.step(actions)
+        running, ctx["mouse_captured"], ctx["follow_mode"], ctx["dragging_slider"], ctx["mouse_sens"], ctx["cam_yaw"], ctx["cam_pitch"] = handle_events(
+            events, ctx["mouse_captured"], ctx["follow_mode"], ctx["dragging_slider"],
+            ctx["slider_rect"], ctx["mouse_sens"], ctx["cam_yaw"], ctx["cam_pitch"], ctx["display"],
+        )
+        handle_movement(ctx["cam_pos"], ctx["cam_yaw"], ctx["cam_pitch"])
 
+        if paused:
+            dt = ctx["clock"].get_time() / 1000.0
+            keys = pygame.key.get_pressed()
+            if keys[K_LEFT] or keys[K_RIGHT]:
+                key_hold_timer += dt
+                if key_hold_timer > 0.3:
+                    step_speed = min(10, 1 + int((key_hold_timer - 0.3) * 8))
+                    if keys[K_RIGHT]:
+                        step_idx = min(step_idx + step_speed, len(history) - 1)
+                    elif keys[K_LEFT]:
+                        step_idx = max(step_idx - step_speed, 0)
+            else:
+                key_hold_timer = 0.0
+
+        if not paused:
+            if step_idx < len(history) - 1:
+                step_idx += 1
+            else:
+                if env.agents:
+                    actions = {}
+                    for agent in env.agents:
+                        o = obs[agent].reshape(1, -1)
+                        act, _ = model.predict(o, deterministic=True)
+                        actions[agent] = act[0]
+                    obs, rewards, terms, truncs, infos = env.step(actions)
+                    history.append(_snapshot())
+                    step_idx = len(history) - 1
+                else:
+                    obs, infos = env.reset()
+                    history = [_snapshot()]
+                    target_pos = env.target_pos.copy()
+                    step_idx = 0
+                    episode_num += 1
+
+        frame = history[step_idx]
+        trails = _trails_at(step_idx)
+        drones_list = []
         for name in env.possible_agents:
-            if name in env.drones:
-                if name not in trails:
-                    trails[name] = []
-                trails[name].append(env.drones[name].position.copy())
-                if len(trails[name]) > 400:
-                    trails[name].pop(0)
+            if name in frame:
+                pos, vel = frame[name]
+                d = Drone(position=pos.copy())
+                d.velocity = vel.copy()
+                drones_list.append((d, trails.get(name, [])))
 
-        if not env.agents:
-            obs, infos = env.reset()
-            trails.clear()
+        ctx["sim_time"] = step_idx * env.dt
 
-        ctx["sim_time"] += env.dt
+        display = ctx["display"]
+        if ctx["follow_mode"] and drones_list:
+            ctx["cam_yaw"], ctx["cam_pitch"] = apply_follow_mode(
+                ctx["cam_pos"], drones_list, ctx["cam_yaw"], ctx["cam_pitch"])
+        if ctx["cam_pos"][1] < 0.3:
+            ctx["cam_pos"][1] = 0.3
 
-        drones_list = [(env.drones[name], trails.get(name, [])) for name in env.possible_agents if name in env.drones]
-        _render_frame(ctx, drones_list, target_pos=env.target_pos)
+        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+        glMatrixMode(GL_PROJECTION)
+        glLoadIdentity()
+        gluPerspective(60, display[0] / display[1], 0.1, 500.0)
+        glMatrixMode(GL_MODELVIEW)
+        glLoadIdentity()
+
+        cam_x, cam_y, cam_z = ctx["cam_pos"]
+        look_x, look_y, look_z = compute_look_target(ctx["cam_pos"], ctx["cam_yaw"], ctx["cam_pitch"])
+        up_y = 1.0 if ctx["cam_pitch"] > -89 else -1.0
+        gluLookAt(cam_x, cam_y, cam_z, look_x, look_y, look_z, 0, up_y, 0)
+
+        draw_sky_gradient()
+        draw_sun(cam_x, cam_y, cam_z)
+        glCallList(ctx["ground_dl"])
+        glCallList(ctx["grid_dl"])
+        draw_axes()
+        draw_target(target_pos)
+
+        for i, (drone, trail) in enumerate(drones_list):
+            draw_trail(trail, TRAIL_COLORS[i % len(TRAIL_COLORS)])
+            draw_drone(drone.position, drone.velocity, ctx["sim_time"], DRONE_COLORS[i % len(DRONE_COLORS)])
+
+        ctx["hud_surface"].fill((0, 0, 0, 0))
+        draw_eval_hud(ctx["hud_surface"], drones_list, ctx["font"], ctx["mouse_sens"], ctx["follow_mode"],
+                      fps=ctx["clock"].get_fps(), cam_pos=(cam_x, cam_y, cam_z),
+                      cam_yaw=ctx["cam_yaw"], cam_pitch=ctx["cam_pitch"],
+                      step_idx=step_idx, total_steps=len(history) - 1, paused=paused, episode_num=episode_num)
+        blit_hud_texture(ctx["hud_surface"], ctx["hud_tex"], display)
+
+        pygame.display.flip()
+        ctx["clock"].tick(60)
 
     pygame.quit()
 

@@ -24,7 +24,7 @@ class SwarmTargetEnv(ParallelEnv):
         super().__init__()
         self.n_drones = n_drones
         self.k_neighbors = k_neighbors
-        self.target_pos = np.array(target_pos or [30.0, 5.0, 0.0], dtype=np.float64)
+        self.target_pos = np.array(target_pos or [60.0, 5.0, 0.0], dtype=np.float64)
         self.spawn_center = np.array(spawn_center or [0.0, 5.0, 0.0], dtype=np.float64)
         self.spawn_radius = spawn_radius
         self.dt = dt
@@ -62,6 +62,14 @@ class SwarmTargetEnv(ParallelEnv):
         self.step_count = 0
 
         rng = np.random.default_rng(seed)
+
+        angle = rng.uniform(0, 2 * np.pi)
+        dist = 60.0 + rng.uniform(-5, 5)
+        self.target_pos = np.array([
+            dist * np.cos(angle),
+            5.0 + rng.uniform(0, 3),
+            dist * np.sin(angle),
+        ])
 
         for name in self.possible_agents:
             offset = rng.uniform(-1, 1, size=3) * self.spawn_radius
@@ -105,10 +113,10 @@ class SwarmTargetEnv(ParallelEnv):
             # Approach shaping
             reward += 5.0 * (d_prev - d_curr) / max(d_init, 1e-6)
 
-            # Angular spread (within engage radius)
-            if d_curr < self.r_engage:
+            # Angular spread (only close to target)
+            if d_curr < self.r_hit * 6:
                 min_angle = self._min_approach_angle(agent)
-                reward += 3.0 * max(0.0, min_angle / np.pi - 0.3)
+                reward += 1.0 * max(0.0, min_angle / np.pi - 0.3)
 
             # Energy penalty
             act = np.array(actions.get(agent, np.zeros(3)), dtype=np.float64)

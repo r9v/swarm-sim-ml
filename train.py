@@ -2,7 +2,7 @@ import argparse
 import os
 import supersuit as ss
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback
+from stable_baselines3.common.callbacks import CheckpointCallback, ProgressBarCallback
 from stable_baselines3.common.vec_env import VecMonitor
 from env import SwarmTargetEnv
 
@@ -43,7 +43,7 @@ def train(args):
     )
 
     print(f"Training PPO | {args.total_timesteps} timesteps | {args.n_drones} drones | {args.num_envs} parallel envs")
-    model.learn(total_timesteps=args.total_timesteps, callback=checkpoint_cb)
+    model.learn(total_timesteps=args.total_timesteps, callback=[checkpoint_cb, ProgressBarCallback()])
     model.save("checkpoints/ppo_swarm_final")
     env.close()
     print("Done. Model saved to checkpoints/ppo_swarm_final")
