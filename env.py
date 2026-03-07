@@ -20,7 +20,6 @@ class SwarmTargetEnv(ParallelEnv):
         r_collision=0.3,
         r_engage=10.0,
         r_bounds=50.0,
-        render_mode=None,
     ):
         super().__init__()
         self.n_drones = n_drones
@@ -34,7 +33,7 @@ class SwarmTargetEnv(ParallelEnv):
         self.r_collision = r_collision
         self.r_engage = r_engage
         self.r_bounds = r_bounds
-        self.render_mode = render_mode
+        self.render_mode = None
 
         self.possible_agents = [f"drone_{i}" for i in range(n_drones)]
         self.obs_dim = 6 + 3 + k_neighbors * 6
@@ -47,12 +46,6 @@ class SwarmTargetEnv(ParallelEnv):
         self.prev_dists: dict[str, float] = {}
         self.hit_angles: list[np.ndarray] = []
         self.step_count = 0
-        self._renderer_initialized = False
-        self._cam_yaw = 0.0
-        self._cam_pitch = 15.0
-        self._cam_dist = 30.0
-        self._mouse_captured = True
-        self._quit_requested = False
 
     def observation_space(self, agent):
         return self._obs_space
@@ -166,9 +159,6 @@ class SwarmTargetEnv(ParallelEnv):
 
         self.agents = [a for a in self.agents if a not in newly_dead]
 
-        if self.render_mode == "human":
-            self.render()
-
         return observations, rewards, terminations, truncations, infos
 
     def _get_obs(self, agent):
@@ -234,119 +224,7 @@ class SwarmTargetEnv(ParallelEnv):
         return min_angle
 
     def render(self):
-        if self.render_mode != "human":
-            return
-        if not self._renderer_initialized:
-            self._init_renderer()
-        self._render_frame()
-
-    def _init_renderer(self):
-        import pygame
-        from pygame.locals import DOUBLEBUF, OPENGL
-        from OpenGL.GL import (
-            glEnable, glBlendFunc, GL_DEPTH_TEST, GL_BLEND,
-            GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA,
-        )
-        from viewer import build_ground_list, build_grid_list
-
-        pygame.init()
-        self._display = (1280, 900)
-        pygame.display.set_mode(self._display, DOUBLEBUF | OPENGL)
-        pygame.display.set_caption("Swarm Target Env")
-        glEnable(GL_DEPTH_TEST)
-        glEnable(GL_BLEND)
-        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-        self._ground_dl = build_ground_list()
-        self._grid_dl = build_grid_list()
-        self._clock = pygame.time.Clock()
-        self._sim_time = 0.0
-        self._renderer_initialized = True
-        pygame.event.set_grab(True)
-        pygame.mouse.set_visible(False)
-        pygame.mouse.get_rel()
-
-    def _render_frame(self):
-        import pygame
-        from OpenGL.GL import (
-            glClear, GL_COLOR_BUFFER_BIT, GL_DEPTH_BUFFER_BIT,
-            glMatrixMode, glLoadIdentity, GL_PROJECTION, GL_MODELVIEW,
-            glCallList,
-        )
-        from OpenGL.GLU import gluPerspective, gluLookAt
-        from viewer import (
-            draw_sky_gradient, draw_sun, draw_axes, draw_drone,
-            draw_trail, draw_target, DRONE_COLORS, TRAIL_COLORS,
-        )
-
-        for event in pygame.event.get():
-            if event.type == pygame.QUIT:
-                self._quit_requested = True
-                self.close()
-                return
-            if event.type == pygame.KEYDOWN:
-                if event.key == pygame.K_ESCAPE:
-                    self._quit_requested = True
-                    self.close()
-                    return
-                if event.key == pygame.K_UP:
-                    self._cam_dist = max(5.0, self._cam_dist - 5.0)
-                if event.key == pygame.K_DOWN:
-                    self._cam_dist = min(80.0, self._cam_dist + 5.0)
-
-        if self._mouse_captured:
-            dx, dy = pygame.mouse.get_rel()
-            self._cam_yaw -= dx * 0.15
-            self._cam_pitch = np.clip(self._cam_pitch + dy * 0.15, -85, 89)
-
-        self._sim_time += self.dt
-
-        all_drones = list(self.drones.values())
-        if not all_drones:
-            return
-
-        centroid = np.mean([d.position for d in all_drones], axis=0)
-
-        yaw_rad = np.radians(self._cam_yaw)
-        pitch_rad = np.radians(self._cam_pitch)
-        cam_offset = np.array([
-            -np.sin(yaw_rad) * np.cos(pitch_rad),
-            np.sin(pitch_rad),
-            np.cos(yaw_rad) * np.cos(pitch_rad),
-        ]) * self._cam_dist
-        cam_pos = centroid + cam_offset
-
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(60, self._display[0] / self._display[1], 0.1, 500.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-        gluLookAt(
-            cam_pos[0], cam_pos[1], cam_pos[2],
-            centroid[0], centroid[1], centroid[2],
-            0, 1, 0,
-        )
-
-        draw_sky_gradient()
-        draw_sun(cam_pos[0], cam_pos[1], cam_pos[2])
-        glCallList(self._ground_dl)
-        glCallList(self._grid_dl)
-        draw_axes()
-        draw_target(self.target_pos)
-
-        for i, name in enumerate(self.possible_agents):
-            if name not in self.drones:
-                continue
-            drone = self.drones[name]
-            color = DRONE_COLORS[i % len(DRONE_COLORS)]
-            trail_color = TRAIL_COLORS[i % len(TRAIL_COLORS)]
-            draw_drone(drone.position, drone.velocity, self._sim_time, color)
-
-        pygame.display.flip()
-        self._clock.tick(60)
+        pass
 
     def close(self):
-        if self._renderer_initialized:
-            import pygame
-            pygame.quit()
-            self._renderer_initialized = False
+        pass

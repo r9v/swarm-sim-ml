@@ -7,8 +7,8 @@ from stable_baselines3.common.vec_env import VecMonitor
 from env import SwarmTargetEnv
 
 
-def make_env(n_drones=8, render_mode=None):
-    env = SwarmTargetEnv(n_drones=n_drones, render_mode=render_mode)
+def make_env(n_drones=8):
+    env = SwarmTargetEnv(n_drones=n_drones)
     env = ss.black_death_v3(env)
     env = ss.pad_observations_v0(env)
     env = ss.pad_action_space_v0(env)

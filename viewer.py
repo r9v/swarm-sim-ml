@@ -428,37 +428,105 @@ def apply_follow_mode(cam_pos, drones, cam_yaw, cam_pitch):
     return cam_yaw, cam_pitch
 
 
-# --- Main ---
+# --- Viewer setup ---
 
-def main():
-    pygame.init()
+def _init_viewer(title="Drone Swarm 3D Sim"):
     display = (1280, 900)
+    pygame.init()
     pygame.display.set_mode(display, DOUBLEBUF | OPENGL)
-    pygame.display.set_caption("Drone Swarm 3D Sim")
-
-    hud_surface = pygame.Surface(display, pygame.SRCALPHA)
-    font = pygame.font.SysFont("consolas", 14)
+    pygame.display.set_caption(title)
 
     glEnable(GL_DEPTH_TEST)
     glEnable(GL_BLEND)
     glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-    ground_dl = build_ground_list()
-    grid_dl = build_grid_list()
 
     hud_tex = glGenTextures(1)
     glBindTexture(GL_TEXTURE_2D, hud_tex)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
 
-    cam_yaw = 0.0
-    cam_pitch = 15.0
-    cam_pos = np.array([0.0, 25.0, 60.0])
-    follow_mode = False
-    mouse_sens = 2.5
+    pygame.mouse.set_visible(False)
+    pygame.event.set_grab(True)
+    pygame.mouse.get_rel()
 
-    slider_rect = pygame.Rect(10, display[1] - 60, 160, 12)
-    dragging_slider = False
+    return {
+        "display": display,
+        "hud_surface": pygame.Surface(display, pygame.SRCALPHA),
+        "font": pygame.font.SysFont("consolas", 14),
+        "ground_dl": build_ground_list(),
+        "grid_dl": build_grid_list(),
+        "hud_tex": hud_tex,
+        "clock": pygame.time.Clock(),
+        "cam_yaw": 0.0,
+        "cam_pitch": 15.0,
+        "cam_pos": np.array([0.0, 25.0, 60.0]),
+        "follow_mode": False,
+        "mouse_sens": 2.5,
+        "mouse_captured": True,
+        "slider_rect": pygame.Rect(10, display[1] - 60, 160, 12),
+        "dragging_slider": False,
+        "sim_time": 0.0,
+    }
+
+
+def _render_frame(ctx, drones_list, target_pos=None):
+    display = ctx["display"]
+
+    if ctx["follow_mode"] and drones_list:
+        ctx["cam_yaw"], ctx["cam_pitch"] = apply_follow_mode(
+            ctx["cam_pos"], drones_list, ctx["cam_yaw"], ctx["cam_pitch"])
+
+    if ctx["cam_pos"][1] < 0.3:
+        ctx["cam_pos"][1] = 0.3
+
+    glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
+    glMatrixMode(GL_PROJECTION)
+    glLoadIdentity()
+    gluPerspective(60, display[0] / display[1], 0.1, 500.0)
+    glMatrixMode(GL_MODELVIEW)
+    glLoadIdentity()
+
+    cam_x, cam_y, cam_z = ctx["cam_pos"]
+    look_x, look_y, look_z = compute_look_target(ctx["cam_pos"], ctx["cam_yaw"], ctx["cam_pitch"])
+    up_y = 1.0 if ctx["cam_pitch"] > -89 else -1.0
+    gluLookAt(cam_x, cam_y, cam_z, look_x, look_y, look_z, 0, up_y, 0)
+
+    draw_sky_gradient()
+    draw_sun(cam_x, cam_y, cam_z)
+    glCallList(ctx["ground_dl"])
+    glCallList(ctx["grid_dl"])
+    draw_axes()
+
+    if target_pos is not None:
+        draw_target(target_pos)
+
+    for i, (drone, trail) in enumerate(drones_list):
+        draw_trail(trail, TRAIL_COLORS[i % len(TRAIL_COLORS)])
+        draw_drone(drone.position, drone.velocity, ctx["sim_time"], DRONE_COLORS[i % len(DRONE_COLORS)])
+
+    ctx["hud_surface"].fill((0, 0, 0, 0))
+    draw_hud(ctx["hud_surface"], drones_list, ctx["font"], ctx["mouse_sens"], ctx["follow_mode"],
+             fps=ctx["clock"].get_fps(), cam_pos=(cam_x, cam_y, cam_z),
+             cam_yaw=ctx["cam_yaw"], cam_pitch=ctx["cam_pitch"])
+    blit_hud_texture(ctx["hud_surface"], ctx["hud_tex"], display)
+
+    pygame.display.flip()
+    ctx["clock"].tick(60)
+
+
+def _handle_frame_input(ctx):
+    running, ctx["mouse_captured"], ctx["follow_mode"], ctx["dragging_slider"], ctx["mouse_sens"], ctx["cam_yaw"], ctx["cam_pitch"] = handle_events(
+        pygame.event.get(), ctx["mouse_captured"], ctx["follow_mode"], ctx["dragging_slider"],
+        ctx["slider_rect"], ctx["mouse_sens"], ctx["cam_yaw"], ctx["cam_pitch"], ctx["display"],
+    )
+    handle_movement(ctx["cam_pos"], ctx["cam_yaw"], ctx["cam_pitch"])
+    return running
+
+
+# --- Main ---
+
+def main():
+    ctx = _init_viewer("Drone Swarm 3D Sim")
 
     n_drones = 5
     drones = []
@@ -467,118 +535,24 @@ def main():
         start_pos = [3 * np.cos(angle), 2.0, 3 * np.sin(angle)]
         drones.append((Drone(position=start_pos), []))
 
-    dt = 0.05
-    sim_time = 0.0
-    clock = pygame.time.Clock()
-
-    mouse_captured = True
-    pygame.mouse.set_visible(False)
-    pygame.event.set_grab(True)
-    pygame.mouse.get_rel()
-
     running = True
     while running:
-        running, mouse_captured, follow_mode, dragging_slider, mouse_sens, cam_yaw, cam_pitch = handle_events(
-            pygame.event.get(), mouse_captured, follow_mode, dragging_slider,
-            slider_rect, mouse_sens, cam_yaw, cam_pitch, display,
-        )
-
-        handle_movement(cam_pos, cam_yaw, cam_pitch)
-        step_drones(drones, sim_time, dt)
-        sim_time += dt
-
-        if follow_mode:
-            cam_yaw, cam_pitch = apply_follow_mode(cam_pos, drones, cam_yaw, cam_pitch)
-
-        # Clamp above ground
-        if cam_pos[1] < 0.3:
-            cam_pos[1] = 0.3
-
-        # 3D render
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(60, display[0] / display[1], 0.1, 500.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-
-        cam_x, cam_y, cam_z = cam_pos
-        look_x, look_y, look_z = compute_look_target(cam_pos, cam_yaw, cam_pitch)
-        up_y = 1.0 if cam_pitch > -89 else -1.0
-        gluLookAt(cam_x, cam_y, cam_z, look_x, look_y, look_z, 0, up_y, 0)
-
-        draw_sky_gradient()
-        draw_sun(cam_x, cam_y, cam_z)
-        glCallList(ground_dl)
-        glCallList(grid_dl)
-        draw_axes()
-
-        for i, (drone, trail) in enumerate(drones):
-            draw_trail(trail, TRAIL_COLORS[i % len(TRAIL_COLORS)])
-            draw_drone(drone.position, drone.velocity, sim_time, DRONE_COLORS[i % len(DRONE_COLORS)])
-
-        # HUD
-        hud_surface.fill((0, 0, 0, 0))
-        draw_hud(hud_surface, drones, font, mouse_sens, follow_mode,
-                 fps=clock.get_fps(), cam_pos=(cam_x, cam_y, cam_z),
-                 cam_yaw=cam_yaw, cam_pitch=cam_pitch)
-        blit_hud_texture(hud_surface, hud_tex, display)
-
-        pygame.display.flip()
-        clock.tick(60)
+        running = _handle_frame_input(ctx)
+        step_drones(drones, ctx["sim_time"], 0.05)
+        ctx["sim_time"] += 0.05
+        _render_frame(ctx, drones)
 
     pygame.quit()
 
 
 def eval_loop(env, model):
-    pygame.init()
-    display = (1280, 900)
-    pygame.display.set_mode(display, DOUBLEBUF | OPENGL)
-    pygame.display.set_caption("Swarm Eval Viewer")
-
-    hud_surface = pygame.Surface(display, pygame.SRCALPHA)
-    font = pygame.font.SysFont("consolas", 14)
-
-    glEnable(GL_DEPTH_TEST)
-    glEnable(GL_BLEND)
-    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA)
-
-    ground_dl = build_ground_list()
-    grid_dl = build_grid_list()
-
-    hud_tex = glGenTextures(1)
-    glBindTexture(GL_TEXTURE_2D, hud_tex)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR)
-    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR)
-
-    cam_yaw = 0.0
-    cam_pitch = 15.0
-    cam_pos = np.array([0.0, 25.0, 60.0])
-    follow_mode = False
-    mouse_sens = 2.5
-
-    slider_rect = pygame.Rect(10, display[1] - 60, 160, 12)
-    dragging_slider = False
-
-    sim_time = 0.0
-    clock = pygame.time.Clock()
-
-    mouse_captured = True
-    pygame.mouse.set_visible(False)
-    pygame.event.set_grab(True)
-    pygame.mouse.get_rel()
-
+    ctx = _init_viewer("Swarm Eval Viewer")
     trails = {}
     obs, infos = env.reset()
 
     running = True
     while running:
-        running, mouse_captured, follow_mode, dragging_slider, mouse_sens, cam_yaw, cam_pitch = handle_events(
-            pygame.event.get(), mouse_captured, follow_mode, dragging_slider,
-            slider_rect, mouse_sens, cam_yaw, cam_pitch, display,
-        )
-
-        handle_movement(cam_pos, cam_yaw, cam_pitch)
+        running = _handle_frame_input(ctx)
 
         actions = {}
         for agent in env.agents:
@@ -599,50 +573,10 @@ def eval_loop(env, model):
             obs, infos = env.reset()
             trails.clear()
 
-        sim_time += env.dt
+        ctx["sim_time"] += env.dt
 
-        drones_for_hud = [(env.drones[name], trails.get(name, [])) for name in env.possible_agents if name in env.drones]
-
-        if follow_mode and drones_for_hud:
-            cam_yaw, cam_pitch = apply_follow_mode(cam_pos, drones_for_hud, cam_yaw, cam_pitch)
-
-        if cam_pos[1] < 0.3:
-            cam_pos[1] = 0.3
-
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(60, display[0] / display[1], 0.1, 500.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-
-        cam_x, cam_y, cam_z = cam_pos
-        look_x, look_y, look_z = compute_look_target(cam_pos, cam_yaw, cam_pitch)
-        up_y = 1.0 if cam_pitch > -89 else -1.0
-        gluLookAt(cam_x, cam_y, cam_z, look_x, look_y, look_z, 0, up_y, 0)
-
-        draw_sky_gradient()
-        draw_sun(cam_x, cam_y, cam_z)
-        glCallList(ground_dl)
-        glCallList(grid_dl)
-        draw_axes()
-        draw_target(env.target_pos)
-
-        for i, name in enumerate(env.possible_agents):
-            if name not in env.drones:
-                continue
-            trail = trails.get(name, [])
-            draw_trail(trail, TRAIL_COLORS[i % len(TRAIL_COLORS)])
-            draw_drone(env.drones[name].position, env.drones[name].velocity, sim_time, DRONE_COLORS[i % len(DRONE_COLORS)])
-
-        hud_surface.fill((0, 0, 0, 0))
-        draw_hud(hud_surface, drones_for_hud, font, mouse_sens, follow_mode,
-                 fps=clock.get_fps(), cam_pos=(cam_x, cam_y, cam_z),
-                 cam_yaw=cam_yaw, cam_pitch=cam_pitch)
-        blit_hud_texture(hud_surface, hud_tex, display)
-
-        pygame.display.flip()
-        clock.tick(60)
+        drones_list = [(env.drones[name], trails.get(name, [])) for name in env.possible_agents if name in env.drones]
+        _render_frame(ctx, drones_list, target_pos=env.target_pos)
 
     pygame.quit()
 
