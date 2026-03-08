@@ -40,7 +40,6 @@ class SwarmTargetEnv(ParallelEnv):
         self._act_space = Box(low=-6.0, high=6.0, shape=(3,), dtype=np.float32)
 
         self.drones: dict[str, Drone] = {}
-        self.init_dists: dict[str, float] = {}
         self.prev_dists: dict[str, float] = {}
         self.hit_angles: list[np.ndarray] = []
         self.step_count = 0
@@ -54,7 +53,6 @@ class SwarmTargetEnv(ParallelEnv):
     def reset(self, seed=None, options=None):
         self.agents = list(self.possible_agents)
         self.drones = {}
-        self.init_dists = {}
         self.prev_dists = {}
         self.hit_angles = []
         self.step_count = 0
@@ -81,9 +79,7 @@ class SwarmTargetEnv(ParallelEnv):
             ])
             pos[1] = max(0.5, pos[1])
             self.drones[name] = Drone(position=pos)
-            d = np.linalg.norm(pos - self.target_pos)
-            self.init_dists[name] = d
-            self.prev_dists[name] = d
+            self.prev_dists[name] = np.linalg.norm(pos - self.target_pos)
 
         observations = {a: self._get_obs(a) for a in self.agents}
         infos = {a: {} for a in self.agents}

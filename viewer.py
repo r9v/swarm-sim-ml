@@ -495,7 +495,7 @@ def _init_viewer(title="Drone Swarm 3D Sim"):
     }
 
 
-def _render_frame(ctx, drones_list, target_pos=None):
+def _render_frame(ctx, drones_list, target_pos=None, hud_fn=None):
     display = ctx["display"]
 
     if ctx["follow_mode"] and drones_list:
@@ -531,9 +531,12 @@ def _render_frame(ctx, drones_list, target_pos=None):
         draw_drone(drone.position, drone.velocity, ctx["sim_time"], DRONE_COLORS[i % len(DRONE_COLORS)])
 
     ctx["hud_surface"].fill((0, 0, 0, 0))
-    draw_hud(ctx["hud_surface"], drones_list, ctx["font"], ctx["mouse_sens"], ctx["follow_mode"],
-             fps=ctx["clock"].get_fps(), cam_pos=(cam_x, cam_y, cam_z),
-             cam_yaw=ctx["cam_yaw"], cam_pitch=ctx["cam_pitch"])
+    if hud_fn:
+        hud_fn(ctx["hud_surface"])
+    else:
+        draw_hud(ctx["hud_surface"], drones_list, ctx["font"], ctx["mouse_sens"], ctx["follow_mode"],
+                 fps=ctx["clock"].get_fps(), cam_pos=(cam_x, cam_y, cam_z),
+                 cam_yaw=ctx["cam_yaw"], cam_pitch=ctx["cam_pitch"])
     blit_hud_texture(ctx["hud_surface"], ctx["hud_tex"], display)
 
     pygame.display.flip()
@@ -775,45 +778,14 @@ def eval_loop(env, model):
 
         ctx["sim_time"] = step_idx * env.dt
 
-        display = ctx["display"]
-        if ctx["follow_mode"] and drones_list:
-            ctx["cam_yaw"], ctx["cam_pitch"] = apply_follow_mode(
-                ctx["cam_pos"], drones_list, ctx["cam_yaw"], ctx["cam_pitch"])
-        if ctx["cam_pos"][1] < 0.3:
-            ctx["cam_pos"][1] = 0.3
+        def _eval_hud(surface):
+            cam_x, cam_y, cam_z = ctx["cam_pos"]
+            draw_eval_hud(surface, drones_list, ctx["font"], ctx["mouse_sens"], ctx["follow_mode"],
+                          fps=ctx["clock"].get_fps(), cam_pos=(cam_x, cam_y, cam_z),
+                          cam_yaw=ctx["cam_yaw"], cam_pitch=ctx["cam_pitch"],
+                          step_idx=step_idx, total_steps=len(history) - 1, paused=paused, episode_num=episode_num)
 
-        glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT)
-        glMatrixMode(GL_PROJECTION)
-        glLoadIdentity()
-        gluPerspective(60, display[0] / display[1], 0.1, 500.0)
-        glMatrixMode(GL_MODELVIEW)
-        glLoadIdentity()
-
-        cam_x, cam_y, cam_z = ctx["cam_pos"]
-        look_x, look_y, look_z = compute_look_target(ctx["cam_pos"], ctx["cam_yaw"], ctx["cam_pitch"])
-        up_y = 1.0 if ctx["cam_pitch"] > -89 else -1.0
-        gluLookAt(cam_x, cam_y, cam_z, look_x, look_y, look_z, 0, up_y, 0)
-
-        draw_sky_gradient()
-        draw_sun(cam_x, cam_y, cam_z)
-        glCallList(ctx["ground_dl"])
-        glCallList(ctx["grid_dl"])
-        draw_axes()
-        draw_target(target_pos)
-
-        for i, (drone, trail) in enumerate(drones_list):
-            draw_trail(trail, TRAIL_COLORS[i % len(TRAIL_COLORS)])
-            draw_drone(drone.position, drone.velocity, ctx["sim_time"], DRONE_COLORS[i % len(DRONE_COLORS)])
-
-        ctx["hud_surface"].fill((0, 0, 0, 0))
-        draw_eval_hud(ctx["hud_surface"], drones_list, ctx["font"], ctx["mouse_sens"], ctx["follow_mode"],
-                      fps=ctx["clock"].get_fps(), cam_pos=(cam_x, cam_y, cam_z),
-                      cam_yaw=ctx["cam_yaw"], cam_pitch=ctx["cam_pitch"],
-                      step_idx=step_idx, total_steps=len(history) - 1, paused=paused, episode_num=episode_num)
-        blit_hud_texture(ctx["hud_surface"], ctx["hud_tex"], display)
-
-        pygame.display.flip()
-        ctx["clock"].tick(60)
+        _render_frame(ctx, drones_list, target_pos=target_pos, hud_fn=_eval_hud)
 
     pygame.quit()
 
