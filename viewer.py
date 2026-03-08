@@ -749,8 +749,8 @@ def eval_loop(env, model):
                             d = inf['distance_to_target']
                             tr = ep_log["total_reward"].get(a, 0)
                             act = actions.get(a, np.zeros(3))
-                            print(f"    {a}: pos=({p[0]:+6.1f},{p[1]:+5.1f},{p[2]:+6.1f})  dist={d:5.1f}  spd={spd:4.1f}  nn={inf['nn_dist']:4.1f}")
-                            print(f"             r_app={inf['r_approach']:+.2f} r_prx={inf['r_prox']:+.2f} r_rep={inf['r_repel']:+.2f}  cumR={tr:+.1f}  act=({act[0]:+.1f},{act[1]:+.1f},{act[2]:+.1f})")
+                            print(f"    {a}: pos=({p[0]:+6.1f},{p[1]:+5.1f},{p[2]:+6.1f})  dist={d:5.1f}  spd={spd:4.1f}  nn={inf['nn_dist']:4.1f}  Δang={inf['min_ang_diff_deg']:.0f}°")
+                            print(f"             r_app={inf['r_approach']:+.2f} r_ang={inf['r_angular']:+.2f} r_loi={inf['r_loiter']:+.2f}  cumR={tr:+.1f}  act=({act[0]:+.1f},{act[1]:+.1f},{act[2]:+.1f})")
 
                     history.append(_snapshot())
                     step_idx = len(history) - 1

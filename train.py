@@ -36,10 +36,11 @@ def train(args):
         n_epochs=10,
         gamma=0.99,
         gae_lambda=0.95,
-        ent_coef=0.01,
+        ent_coef=0.05,
         verbose=1,
         tensorboard_log="./logs/",
         device=args.device,
+        policy_kwargs=dict(log_std_init=0.5),
     )
 
     print(f"Training PPO | {args.total_timesteps} timesteps | {args.n_drones} drones | {args.num_envs} parallel envs")

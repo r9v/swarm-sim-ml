@@ -34,10 +34,10 @@ class SwarmTargetEnv(ParallelEnv):
         self.render_mode = None
 
         self.possible_agents = [f"drone_{i}" for i in range(n_drones)]
-        self.obs_dim = 6 + 3 + k_neighbors * 6 + 1
+        self.obs_dim = 6 + 3 + 2 + 3 + k_neighbors * 6 + n_drones
 
         self._obs_space = Box(low=-2.0, high=2.0, shape=(self.obs_dim,), dtype=np.float32)
-        self._act_space = Box(low=-3.0, high=3.0, shape=(3,), dtype=np.float32)
+        self._act_space = Box(low=-6.0, high=6.0, shape=(3,), dtype=np.float32)
 
         self.drones: dict[str, Drone] = {}
         self.init_dists: dict[str, float] = {}
@@ -117,17 +117,39 @@ class SwarmTargetEnv(ParallelEnv):
             r_approach = 2.0 * (d_prev - d_curr) - 0.01
             reward += r_approach
 
-            r_prox = 0.0
-            if d_curr < 5.0:
-                r_prox = 1.0 * (1.0 - d_curr / 5.0)
-            reward += r_prox
-
             nn_dist = self._nearest_neighbor_dist(agent)
-            r_repel = 0.0
-            if nn_dist < 5.0:
-                far_scale = min(1.0, d_curr / 5.0)
-                r_repel = -0.5 * (1.0 - nn_dist / 5.0) * far_scale
-            reward += r_repel
+
+            dir_vec = drone.position - self.target_pos
+            dir_norm = np.linalg.norm(dir_vec)
+            dir_unit = dir_vec / max(dir_norm, 1e-9)
+
+            min_ang_diff = np.pi
+            for other_name in self.agents:
+                if other_name == agent:
+                    continue
+                other = self.drones[other_name]
+                o_vec = other.position - self.target_pos
+                o_unit = o_vec / max(np.linalg.norm(o_vec), 1e-9)
+                dot = np.clip(np.dot(dir_unit, o_unit), -1.0, 1.0)
+                min_ang_diff = min(min_ang_diff, np.arccos(dot))
+
+            ang_thresh = np.pi / 4
+            r_angular = 0.0
+            if min_ang_diff < ang_thresh and d_curr > 5.0:
+                r_angular = -0.4 * (1.0 - min_ang_diff / ang_thresh)
+            reward += r_angular
+
+            r_avoid = 0.0
+            if nn_dist < 1.0:
+                r_avoid = -1.0 * (1.0 - nn_dist)
+            reward += r_avoid
+
+            r_loiter = 0.0
+            if d_curr < 5.0 and d_curr > self.r_hit:
+                closing_speed = (d_prev - d_curr) / self.dt
+                if closing_speed < 1.0:
+                    r_loiter = -0.5 * (1.0 - closing_speed)
+            reward += r_loiter
 
             if d_curr < self.r_hit:
                 approach_vec = drone.position - self.target_pos
@@ -143,20 +165,20 @@ class SwarmTargetEnv(ParallelEnv):
                 terminated = True
 
             elif agent in collision_set:
-                reward -= 5.0
+                reward -= 20.0
                 terminated = True
 
             elif drone.position[1] <= 0.0:
-                reward -= 5.0
+                reward -= 20.0
                 terminated = True
 
             elif np.linalg.norm(drone.position) > self.r_bounds:
-                reward -= 5.0
+                reward -= 20.0
                 terminated = True
 
             if not terminated and self.step_count >= self.max_steps:
                 truncated = True
-                reward -= 3.0
+                reward -= 10.0
 
             self.prev_dists[agent] = d_curr
             observations[agent] = self._get_obs(agent)
@@ -167,8 +189,10 @@ class SwarmTargetEnv(ParallelEnv):
                 "distance_to_target": d_curr,
                 "nn_dist": nn_dist,
                 "r_approach": r_approach,
-                "r_prox": r_prox,
-                "r_repel": r_repel,
+                "r_angular": r_angular,
+                "r_avoid": r_avoid,
+                "r_loiter": r_loiter,
+                "min_ang_diff_deg": np.degrees(min_ang_diff),
             }
 
             if terminated or truncated:
@@ -184,16 +208,27 @@ class SwarmTargetEnv(ParallelEnv):
 
         obs[0:3] = drone.position / self.r_bounds
         obs[3:6] = drone.velocity / drone.max_speed
-        obs[6:9] = (self.target_pos - drone.position) / self.r_bounds
+        rel_target = self.target_pos - drone.position
+        obs[6:9] = rel_target / self.r_bounds
+
+        horiz = np.sqrt(rel_target[0]**2 + rel_target[2]**2)
+        obs[9] = np.arctan2(rel_target[2], rel_target[0]) / np.pi
+        obs[10] = np.arctan2(rel_target[1], max(horiz, 1e-9)) / (np.pi / 2)
+
+        positions = [self.drones[a].position for a in self.agents if a in self.drones]
+        centroid = np.mean(positions, axis=0) if positions else drone.position
+        obs[11:14] = (drone.position - centroid) / self.r_bounds
 
         neighbors = self._get_k_nearest(agent)
+        nb_pos = 14
+        nb_vel = nb_pos + self.k_neighbors * 3
         for j, (rel_pos, rel_vel) in enumerate(neighbors):
-            obs[9 + j * 3: 9 + j * 3 + 3] = rel_pos / self.r_bounds
-            base = 9 + self.k_neighbors * 3
-            obs[base + j * 3: base + j * 3 + 3] = rel_vel / drone.max_speed
+            obs[nb_pos + j * 3: nb_pos + j * 3 + 3] = rel_pos / self.r_bounds
+            obs[nb_vel + j * 3: nb_vel + j * 3 + 3] = rel_vel / drone.max_speed
 
         idx = int(agent.split("_")[1])
-        obs[-1] = idx / max(self.n_drones - 1, 1)
+        obs[-(self.n_drones):] = 0.0
+        obs[-(self.n_drones) + idx] = 1.0
 
         return obs
 

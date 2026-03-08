@@ -13,8 +13,8 @@ class Drone:
         position: np.ndarray,
         velocity: np.ndarray | None = None,
         max_speed: float = 5.0,
-        max_accel: float = 3.0,
-        drag: float = 0.1,
+        max_accel: float = 6.0,
+        drag: float = 0.05,
     ):
         self.position = np.array(position, dtype=np.float64)
         assert self.position.shape == (3,)
