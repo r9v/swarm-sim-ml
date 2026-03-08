@@ -28,20 +28,26 @@ def train(args):
         name_prefix="ppo_swarm",
     )
 
-    model = PPO(
-        "MlpPolicy",
-        env,
-        learning_rate=args.lr,
-        batch_size=args.batch_size,
-        n_epochs=10,
-        gamma=0.99,
-        gae_lambda=0.95,
-        ent_coef=0.05,
-        verbose=1,
-        tensorboard_log="./logs/",
-        device=args.device,
-        policy_kwargs=dict(log_std_init=0.5),
-    )
+    if args.resume:
+        model = PPO.load(args.resume, env=env, device=args.device,
+                         learning_rate=args.lr, batch_size=args.batch_size,
+                         ent_coef=0.05, tensorboard_log="./logs/")
+        print(f"Resuming from {args.resume}")
+    else:
+        model = PPO(
+            "MlpPolicy",
+            env,
+            learning_rate=args.lr,
+            batch_size=args.batch_size,
+            n_epochs=10,
+            gamma=0.99,
+            gae_lambda=0.95,
+            ent_coef=0.05,
+            verbose=1,
+            tensorboard_log="./logs/",
+            device=args.device,
+            policy_kwargs=dict(log_std_init=0.5),
+        )
 
     print(f"Training PPO | {args.total_timesteps} timesteps | {args.n_drones} drones | {args.num_envs} parallel envs")
     model.learn(total_timesteps=args.total_timesteps, callback=[checkpoint_cb, ProgressBarCallback()])
@@ -69,6 +75,7 @@ if __name__ == "__main__":
     t.add_argument("--lr", type=float, default=3e-4)
     t.add_argument("--batch-size", type=int, default=256)
     t.add_argument("--device", default="cpu")
+    t.add_argument("--resume", type=str, default=None, help="path to checkpoint to resume from")
 
     e = sub.add_parser("eval")
     e.add_argument("--model-path", required=True)

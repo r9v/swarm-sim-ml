@@ -114,9 +114,6 @@ class SwarmTargetEnv(ParallelEnv):
             terminated = False
             truncated = False
 
-            r_approach = 2.0 * (d_prev - d_curr) - 0.01
-            reward += r_approach
-
             nn_dist = self._nearest_neighbor_dist(agent)
 
             dir_vec = drone.position - self.target_pos
@@ -134,10 +131,21 @@ class SwarmTargetEnv(ParallelEnv):
                 min_ang_diff = min(min_ang_diff, np.arccos(dot))
 
             ang_thresh = np.pi / 4
+            ang_ratio = min(min_ang_diff / ang_thresh, 1.0)
+
+            r_approach = 2.0 * (d_prev - d_curr) - 0.01
+            approach_scale = 0.5 + 0.5 * ang_ratio
+            r_approach *= approach_scale
+            reward += r_approach
+
             r_angular = 0.0
             if min_ang_diff < ang_thresh and d_curr > 5.0:
-                r_angular = -0.4 * (1.0 - min_ang_diff / ang_thresh)
+                r_angular = -0.4 * (1.0 - ang_ratio)
             reward += r_angular
+
+            has_neighbors = any(a != agent for a in self.agents)
+            r_spread = 0.2 * ang_ratio if d_curr > 5.0 and has_neighbors else 0.0
+            reward += r_spread
 
             r_avoid = 0.0
             if nn_dist < 1.0:
@@ -190,6 +198,7 @@ class SwarmTargetEnv(ParallelEnv):
                 "nn_dist": nn_dist,
                 "r_approach": r_approach,
                 "r_angular": r_angular,
+                "r_spread": r_spread,
                 "r_avoid": r_avoid,
                 "r_loiter": r_loiter,
                 "min_ang_diff_deg": np.degrees(min_ang_diff),

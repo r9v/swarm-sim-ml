@@ -10,11 +10,14 @@ venv/
 .env
 *.mp4
 *.gif
+!demo.gif
 checkpoints/
+!checkpoints/ppo_swarm_final.zip
 outputs/
 wandb/
 *txt
 !requirements.txt
 *.md
 !README.md
+!commands.md
 logs/*
