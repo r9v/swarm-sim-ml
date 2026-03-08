@@ -13,12 +13,11 @@ class SwarmTargetEnv(ParallelEnv):
         k_neighbors=5,
         target_pos=None,
         spawn_center=None,
-        spawn_radius=6.0,
+        grid_spacing=2.0,
         dt=0.05,
         max_steps=1000,
         r_hit=1.0,
         r_collision=0.3,
-        r_engage=10.0,
         r_bounds=100.0,
     ):
         super().__init__()
@@ -26,17 +25,16 @@ class SwarmTargetEnv(ParallelEnv):
         self.k_neighbors = k_neighbors
         self.target_pos = np.array(target_pos or [60.0, 5.0, 0.0], dtype=np.float64)
         self.spawn_center = np.array(spawn_center or [0.0, 5.0, 0.0], dtype=np.float64)
-        self.spawn_radius = spawn_radius
+        self.grid_spacing = grid_spacing
         self.dt = dt
         self.max_steps = max_steps
         self.r_hit = r_hit
         self.r_collision = r_collision
-        self.r_engage = r_engage
         self.r_bounds = r_bounds
         self.render_mode = None
 
         self.possible_agents = [f"drone_{i}" for i in range(n_drones)]
-        self.obs_dim = 6 + 3 + k_neighbors * 6 + 3
+        self.obs_dim = 6 + 3 + k_neighbors * 6 + 1
 
         self._obs_space = Box(low=-2.0, high=2.0, shape=(self.obs_dim,), dtype=np.float32)
         self._act_space = Box(low=-3.0, high=3.0, shape=(3,), dtype=np.float32)
@@ -63,17 +61,24 @@ class SwarmTargetEnv(ParallelEnv):
 
         rng = np.random.default_rng(seed)
 
-        self._target_angle = rng.uniform(0, 2 * np.pi)
         dist = 60.0 + rng.uniform(-5, 5)
+        angle = rng.uniform(0, 2 * np.pi)
         self.target_pos = np.array([
-            dist * np.cos(self._target_angle),
+            dist * np.cos(angle),
             5.0 + rng.uniform(0, 3),
-            dist * np.sin(self._target_angle),
+            dist * np.sin(angle),
         ])
 
+        cols = 4
         for name in self.possible_agents:
-            offset = rng.uniform(-1, 1, size=3) * self.spawn_radius
-            pos = self.spawn_center + offset
+            idx = int(name.split("_")[1])
+            row = idx // cols
+            col = idx % cols
+            pos = self.spawn_center + np.array([
+                (col - (cols - 1) / 2) * self.grid_spacing,
+                0.0,
+                (row - 0.5) * self.grid_spacing,
+            ])
             pos[1] = max(0.5, pos[1])
             self.drones[name] = Drone(position=pos)
             d = np.linalg.norm(pos - self.target_pos)
@@ -104,7 +109,6 @@ class SwarmTargetEnv(ParallelEnv):
             drone = self.drones[agent]
             d_curr = np.linalg.norm(drone.position - self.target_pos)
             d_prev = self.prev_dists[agent]
-            d_init = self.init_dists[agent]
 
             reward = 0.0
             terminated = False
@@ -118,28 +122,13 @@ class SwarmTargetEnv(ParallelEnv):
                 r_prox = 1.0 * (1.0 - d_curr / 5.0)
             reward += r_prox
 
-            speed = np.linalg.norm(drone.velocity)
-            r_speed = 0.0
-            if d_curr < 10.0:
-                r_speed = -0.2 * (speed / drone.max_speed) * (1.0 - d_curr / 10.0)
-            reward += r_speed
+            nn_dist = self._nearest_neighbor_dist(agent)
+            r_repel = 0.0
+            if nn_dist < 5.0:
+                far_scale = min(1.0, d_curr / 5.0)
+                r_repel = -0.5 * (1.0 - nn_dist / 5.0) * far_scale
+            reward += r_repel
 
-            idx = int(agent.split("_")[1])
-            assigned_angle = self._target_angle + np.pi + 2 * np.pi * idx / self.n_drones
-            assigned_dir = np.array([np.cos(assigned_angle), 0.0, np.sin(assigned_angle)])
-            from_target = drone.position - self.target_pos
-            from_target_xz = np.array([from_target[0], 0.0, from_target[2]])
-            xz_norm = np.linalg.norm(from_target_xz)
-            r_sector = 0.0
-            alignment = 0.0
-            if xz_norm > 1e-6 and d_curr < 30.0:
-                sector_dir = from_target_xz / xz_norm
-                alignment = np.dot(sector_dir, assigned_dir)
-                closeness = max(0.0, 1.0 - d_curr / 30.0)
-                r_sector = 0.3 * closeness * max(-0.3, alignment)
-            reward += r_sector
-
-            # Terminal: hit target
             if d_curr < self.r_hit:
                 approach_vec = drone.position - self.target_pos
                 norm = np.linalg.norm(approach_vec)
@@ -149,26 +138,22 @@ class SwarmTargetEnv(ParallelEnv):
                     angle_bonus = np.arccos(np.clip(min(dots), -1, 1)) / np.pi
                 else:
                     angle_bonus = 1.0
-                reward += 30.0 + 10.0 * angle_bonus
+                reward += 100.0 + 50.0 * angle_bonus
                 self.hit_angles.append(approach_vec)
                 terminated = True
 
-            # Terminal: collision
             elif agent in collision_set:
                 reward -= 5.0
                 terminated = True
 
-            # Terminal: ground crash
             elif drone.position[1] <= 0.0:
                 reward -= 5.0
                 terminated = True
 
-            # Terminal: out of bounds
             elif np.linalg.norm(drone.position) > self.r_bounds:
                 reward -= 5.0
                 terminated = True
 
-            # Truncation: max steps — penalize for not hitting
             if not terminated and self.step_count >= self.max_steps:
                 truncated = True
                 reward -= 3.0
@@ -178,15 +163,12 @@ class SwarmTargetEnv(ParallelEnv):
             rewards[agent] = float(reward)
             terminations[agent] = terminated
             truncations[agent] = truncated
-            nn_dist = self._nearest_neighbor_dist(agent)
             infos[agent] = {
                 "distance_to_target": d_curr,
                 "nn_dist": nn_dist,
-                "alignment": alignment,
                 "r_approach": r_approach,
                 "r_prox": r_prox,
-                "r_speed": r_speed,
-                "r_sector": r_sector,
+                "r_repel": r_repel,
             }
 
             if terminated or truncated:
@@ -211,8 +193,7 @@ class SwarmTargetEnv(ParallelEnv):
             obs[base + j * 3: base + j * 3 + 3] = rel_vel / drone.max_speed
 
         idx = int(agent.split("_")[1])
-        assigned_angle = self._target_angle + np.pi + 2 * np.pi * idx / self.n_drones
-        obs[-3:] = np.array([np.cos(assigned_angle), 0.0, np.sin(assigned_angle)])
+        obs[-1] = idx / max(self.n_drones - 1, 1)
 
         return obs
 
@@ -251,26 +232,6 @@ class SwarmTargetEnv(ParallelEnv):
                     collided.add(a)
                     collided.add(b)
         return collided
-
-    def _min_approach_angle(self, agent):
-        drone = self.drones[agent]
-        u = drone.position - self.target_pos
-        u_norm = np.linalg.norm(u)
-        if u_norm < 1e-9:
-            return np.pi
-        u = u / u_norm
-        min_angle = np.pi
-        for other_name in self.agents:
-            if other_name == agent:
-                continue
-            v = self.drones[other_name].position - self.target_pos
-            v_norm = np.linalg.norm(v)
-            if v_norm < 1e-9:
-                continue
-            v = v / v_norm
-            angle = np.arccos(np.clip(np.dot(u, v), -1.0, 1.0))
-            min_angle = min(min_angle, angle)
-        return min_angle
 
     def render(self):
         pass

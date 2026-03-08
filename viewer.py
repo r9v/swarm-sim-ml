@@ -588,17 +588,15 @@ def _log_episode(episode_num, ep_log, env):
         for h in hits:
             print(f"    {h}: hit at step {ep_log['death_step'].get(h, '?')}, final_dist={ep_log['final_dist'].get(h, 0):.2f}")
 
-    print(f"\n  {'drone':<10} {'outcome':<12} {'step':<6} {'final_d':<9} {'min_d':<9} {'total_r':<10} {'align_avg':<10}")
-    print(f"  {'-'*10} {'-'*12} {'-'*6} {'-'*9} {'-'*9} {'-'*10} {'-'*10}")
+    print(f"\n  {'drone':<10} {'outcome':<12} {'step':<6} {'final_d':<9} {'min_d':<9} {'total_r':<10}")
+    print(f"  {'-'*10} {'-'*12} {'-'*6} {'-'*9} {'-'*9} {'-'*10}")
     for name in env.possible_agents:
         outcome = ep_log["outcomes"].get(name, "alive")
         step = ep_log["death_step"].get(name, ep_log["steps"])
         final_d = ep_log["final_dist"].get(name, 0)
         min_d = ep_log["min_dist"].get(name, 0)
         total_r = ep_log["total_reward"].get(name, 0)
-        align_vals = ep_log["alignments"].get(name, [])
-        align_avg = np.mean(align_vals) if align_vals else 0
-        print(f"  {name:<10} {outcome:<12} {step:<6} {final_d:<9.2f} {min_d:<9.2f} {total_r:<10.2f} {align_avg:<10.3f}")
+        print(f"  {name:<10} {outcome:<12} {step:<6} {final_d:<9.2f} {min_d:<9.2f} {total_r:<10.2f}")
 
     total_r = sum(ep_log["total_reward"].values())
     print(f"\n  total_reward={total_r:.2f}  avg_per_drone={total_r/len(env.possible_agents):.2f}")
@@ -627,7 +625,6 @@ def eval_loop(env, model):
             "final_dist": {},
             "min_dist": {a: float("inf") for a in env.possible_agents},
             "total_reward": {a: 0.0 for a in env.possible_agents},
-            "alignments": {a: [] for a in env.possible_agents},
         }
 
     ep_log = _new_ep_log()
@@ -728,16 +725,6 @@ def eval_loop(env, model):
                         ep_log["final_dist"][agent] = d
                         ep_log["min_dist"][agent] = min(ep_log["min_dist"].get(agent, float("inf")), d)
 
-                        idx = int(agent.split("_")[1])
-                        assigned_angle = env._target_angle + np.pi + 2 * np.pi * idx / env.n_drones
-                        assigned_dir = np.array([np.cos(assigned_angle), 0.0, np.sin(assigned_angle)])
-                        from_target = env.drones[agent].position - env.target_pos
-                        from_target_xz = np.array([from_target[0], 0.0, from_target[2]])
-                        xz_norm = np.linalg.norm(from_target_xz)
-                        if xz_norm > 1e-6:
-                            alignment = np.dot(from_target_xz / xz_norm, assigned_dir)
-                            ep_log["alignments"][agent].append(alignment)
-
                         if terms.get(agent, False):
                             ep_log["death_step"][agent] = env.step_count
                             if d < env.r_hit:
@@ -762,8 +749,8 @@ def eval_loop(env, model):
                             d = inf['distance_to_target']
                             tr = ep_log["total_reward"].get(a, 0)
                             act = actions.get(a, np.zeros(3))
-                            print(f"    {a}: pos=({p[0]:+6.1f},{p[1]:+5.1f},{p[2]:+6.1f})  dist={d:5.1f}  spd={spd:4.1f}  nn={inf['nn_dist']:4.1f}  aln={inf['alignment']:+.2f}")
-                            print(f"             r_app={inf['r_approach']:+.2f} r_prx={inf['r_prox']:+.2f} r_spd={inf['r_speed']:+.2f} r_sec={inf['r_sector']:+.2f}  cumR={tr:+.1f}  act=({act[0]:+.1f},{act[1]:+.1f},{act[2]:+.1f})")
+                            print(f"    {a}: pos=({p[0]:+6.1f},{p[1]:+5.1f},{p[2]:+6.1f})  dist={d:5.1f}  spd={spd:4.1f}  nn={inf['nn_dist']:4.1f}")
+                            print(f"             r_app={inf['r_approach']:+.2f} r_prx={inf['r_prox']:+.2f} r_rep={inf['r_repel']:+.2f}  cumR={tr:+.1f}  act=({act[0]:+.1f},{act[1]:+.1f},{act[2]:+.1f})")
 
                     history.append(_snapshot())
                     step_idx = len(history) - 1
