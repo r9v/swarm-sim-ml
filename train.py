@@ -7,16 +7,11 @@ from stable_baselines3.common.vec_env import VecMonitor
 from env import SwarmTargetEnv
 
 
-def make_env(n_drones=8):
-    env = SwarmTargetEnv(n_drones=n_drones)
+def train(args):
+    env = SwarmTargetEnv(n_drones=args.n_drones)
     env = ss.black_death_v3(env)
     env = ss.pad_observations_v0(env)
     env = ss.pad_action_space_v0(env)
-    return env
-
-
-def train(args):
-    env = make_env(n_drones=args.n_drones)
     env = ss.pettingzoo_env_to_vec_env_v1(env)
     env = ss.concat_vec_envs_v1(env, num_vec_envs=args.num_envs, num_cpus=1, base_class="stable_baselines3")
     env = VecMonitor(env)
